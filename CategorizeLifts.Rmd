@@ -1,0 +1,109 @@
+---
+output:
+  html_document: default
+  pdf_document:
+    fig_crop: no
+---
+## Classify how well an exercise (dumbell curl) was done
+```{r load, echo=FALSE}
+	library(caret)
+	pml <- read.csv("pml-training.csv")
+	original_number_features <- dim(pml)[2]
+	original_number_rows <- dim(pml)[1]
+	set.seed(1)
+```
+### Why
+Using devices such as Jawbone Up, Nike FuelBand, and Fitbit it is now possible to collect a large amount of data about 
+personal activity relatively inexpensively. 
+These type of devices are part of the quantified self movement – a group of enthusiasts who take 
+measurements about themselves regularly to improve their health, to find patterns in their behavior, or because they are tech geeks. 
+One thing that people regularly do is quantify how much of a particular activity they do, but they rarely quantify how well they do it. 
+The machine learning algorithm will use data from accelerometers on the belt, forearm, arm, and dumbell of 6 participants. 
+They were asked to perform barbell lifts correctly and incorrectly in 5 different ways. 
+More information is available from the website here: http://groupware.les.inf.puc-rio.br/har (see the section on the Weight Lifting Exercise Dataset). 
+
+### Cleaning the data
+
+The original data contains `r original_number_features` features for `r original_number_rows` observations.  To clean the data non zero values (columns) and columns with large numbers of missing values were removed.
+
+```{r cleanup}
+	nzv <- nearZeroVar(pml,saveMetrics=TRUE)
+	pml_nzv <- pml[,!nzv[,4]]
+	work <- is.na(pml_nzv)
+	work_list <- (colSums(work)==max(colSums(work)))
+	pml_stripped <- pml_nzv[,!work_list]
+	pml_stripped_features <- dim(pml_stripped)[2]
+``` 
+This reduces the number of features to `r pml_stripped_features`. The next step was to remove highly correlated variables.
+```{r check_cor}
+	pml_numeric_cor <- pml_stripped[,7:58]
+	pml_cor <- abs(cor(pml_numeric_cor))
+	diag(pml_cor)<-0
+	corTable<-which(pml_cor>.8, arr.ind=TRUE)
+	corLabel<-cbind(rownames(pml_cor)[corTable[,1]],colnames(pml_cor)[corTable[,2]])
+	highlyCorDescr <- findCorrelation(pml_cor, cutoff = .75)
+	pml_filtered <- pml_stripped[,(-(highlyCorDescr+6))]
+```
+The next step is to remove linear combinations
+```{r remove_combos}
+	linearcombos <- findLinearCombos(pml_filtered[,7:37])$remove
+```
+Use principal component analysis to reduce the number of variables
+```{r pca}
+  	work <- prcomp(pml_filtered[,7:37],center=TRUE, scale. = TRUE)
+    pcaOutput <- preProcess(pml_filtered[,7:37], method=c("BoxCox","center","scale","pca"))
+    pml_train <- predict(pcaOutput,pml_filtered[,7:38])
+```
+
+### Plot of features
+Based on the following plot all of the features needed to be included as potential candidates to include in the machine learning.
+```{r buildplot}
+  featurePlot(pml_filtered[,7:37],pml_filtered$classe)
+```    
+
+### Classification model
+The assignment is to create a model that accurately determines which class the observation is based
+on the information about the movement of sensors attached to the person.  A number of methods can be used to accomplish this.
+
+The first method tried  was linear discriminate analysis.
+```{r lda}
+	pml_lda <- train(pml_train$classe ~ ., method="lda", data=pml_train)
+	pml_lda_result <- predict(pml_lda,pml_train)
+	pml_lda_cm <-confusionMatrix(pml_lda_result,pml_train$classe)
+```
+The next method was Stochastic Gradient Boosting (also known as Gradient Boosted Machine or GBM)
+```{r gbm}
+	pml_gbm <- train(pml_train$classe ~ ., method="gbm", data=pml_train,verbose=FALSE)
+	pml_gbm_result <- predict(pml_gbm,pml_train)
+	pml_gbm_cm <-confusionMatrix(pml_gbm_result,pml_train$classe)
+```
+The final method was Random Forest
+```{r rf}
+	pml_rf <-train(classe~.,data=pml_train,method="rf",
+				trControl=trainControl(method="cv",number=5),
+                prox=TRUE,allowParallel=TRUE)
+	pml_rf_result <- predict(pml_rf,pml_train)
+	pml_rf_cm <-confusionMatrix(pml_rf_result,pml_train$classe)			
+```
+### Accuracy of Classification model 
+
+Based on the following estimates of model fit, the Random Forest generates the best results.
+
+The accuracy - how often the classifier generated the correct result is
+
+1. Linear Discriminate analysis `r pml_lda_cm$overall[1]`
+2. Gradient Boosted Machine `r  pml_gbm_cm$overall[1]`
+3. Random Forest `r pml_rf_cm$overall[1]`
+
+The sensitivity - the percentage of observation that the classifier predicts an event will occur correctly
+
+1. Linear Discriminate analysis `r pml_lda_cm$byClass[,1]`
+2. Gradient Boosted Machine `r  pml_gbm_cm$byClass[,1]`
+3. Random Forest `r pml_rf_cm$byClass[,1]`
+
+The specificity - percentage of observations that the classifier predicts an event will not occur correctly
+
+
+1. Linear Discriminate analysis `r pml_lda_cm$byClass[,2]`
+2. Gradient Boosted Machine `r  pml_gbm_cm$byClass[,2]`
+3. Random Forest `r pml_rf_cm$byClass[,2]`
